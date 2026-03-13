@@ -2,11 +2,185 @@
 title: "Laboratorio 3 - Modelos de Regresión Lineal"
 author: "Bryan Martínez, Adriana Palacios, y Nery Molina"
 date: "`r Sys.Date()`"
-output: pdf_document
+output:
+  pdf_document:
+    latex_engine: xelatex
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+library(nortest)
+library(tidyr)
+load("listings.RData")
 ```
 
+
+```{r carga-datos}
+ls()
+str(listings)
+head(listings, 5)
+write.csv(listings, "listings.csv", row.names = FALSE)
+```
+
+## **Análisis Exploratorio**
+
+### **Descripción de Variables - Adriana**
+
+El dataset cuenta con 80 variables. A continuación se describen todas, indicando tipo, subtipo y su rol en el análisis.
+
+**Variable objetivo:**
+
+1. **price** — Cuantitativa continua. Precio por noche del alojamiento (en dólares). *Variable objetivo.*
+2. **id** — Cuantitativa discreta. Identificador único del listing.
+3. **listing_url** — Cualitativa nominal. URL del anuncio en Airbnb.
+4. **scrape_id** — Cuantitativa discreta. ID de la sesión de scraping.
+5. **picture_url** — Cualitativa nominal. URL de la foto principal del listing.
+6. **host_id** — Cuantitativa discreta. Identificador único del anfitrión.
+7. **host_url** — Cualitativa nominal. URL del perfil del anfitrión.
+8. **host_thumbnail_url** — Cualitativa nominal. URL de la foto miniatura del anfitrión.
+9. **host_picture_url** — Cualitativa nominal. URL de la foto de perfil del anfitrión.
+10. **license** — Cualitativa nominal. Número de licencia de operación del listing.
+11. **last_scraped** — Cualitativa nominal. Fecha del último scraping del listing.
+12. **host_since** — Cualitativa nominal. Fecha en que el anfitrión se registró en Airbnb.
+13. **calendar_last_scraped** — Cualitativa nominal. Fecha del último scraping del calendario.
+14. **first_review** — Cualitativa nominal. Fecha de la primera reseña recibida.
+15. **last_review** — Cualitativa nominal. Fecha de la reseña más reciente.
+16. **source** — Cualitativa nominal. Fuente del scraping (city scrape, previous scrape, etc.).
+17. **name** — Cualitativa nominal. Título del anuncio.
+18. **description** — Cualitativa nominal. Descripción completa del listing.
+19. **neighborhood_overview** — Cualitativa nominal. Descripción del vecindario según el anfitrión.
+20. **amenities** — Cualitativa nominal. Lista de comodidades del alojamiento.
+21. **bathrooms_text** — Cualitativa nominal. Descripción textual del número de baños.
+22. **calendar_updated** — Cualitativa nominal. Indica cuándo fue actualizado el calendario por última vez.
+23. **host_name** — Cualitativa nominal. Nombre del anfitrión.
+24. **host_location** — Cualitativa nominal. Ubicación declarada del anfitrión.
+25. **host_about** — Cualitativa nominal. Descripción personal del anfitrión.
+26. **host_response_time** — Cualitativa ordinal. Tiempo típico de respuesta del anfitrión (within an hour < within a few hours < within a day < a few days or more).
+27. **host_response_rate** — Cuantitativa continua. Porcentaje de consultas respondidas por el anfitrión.
+28. **host_acceptance_rate** — Cuantitativa continua. Porcentaje de solicitudes aceptadas por el anfitrión.
+29. **host_is_superhost** — Cualitativa nominal. Indica si el anfitrión tiene estatus de Superhost (t/f).
+30. **host_neighbourhood** — Cualitativa nominal. Vecindario declarado por el anfitrión.
+31. **host_listings_count** — Cuantitativa discreta. Número de listings activos del anfitrión.
+32. **host_total_listings_count** — Cuantitativa discreta. Total de listings (histórico) del anfitrión.
+33. **host_verifications** — Cualitativa nominal. Lista de métodos de verificación del anfitrión.
+34. **host_has_profile_pic** — Cualitativa nominal. Indica si el anfitrión tiene foto de perfil (t/f).
+35. **host_identity_verified** — Cualitativa nominal. Indica si la identidad del anfitrión fue verificada (t/f).
+36. **neighbourhood** — Cualitativa nominal. Vecindario del listing según el anfitrión.
+37. **neighbourhood_cleansed** — Cualitativa nominal. Vecindario normalizado por Airbnb.
+38. **neighbourhood_group_cleansed** — Cualitativa nominal. Agrupación de vecindarios (puede estar vacía).
+39. **latitude** — Cuantitativa continua. Latitud geográfica del listing.
+40. **longitude** — Cuantitativa continua. Longitud geográfica del listing.
+41. **city** — Cualitativa nominal. Ciudad donde se ubica el listing.
+42. **property_type** — Cualitativa nominal. Tipo de propiedad (Entire home, Private room, etc.).
+43. **room_type** — Cualitativa nominal. Categoría del espacio ofrecido.
+44. **accommodates** — Cuantitativa discreta. Número máximo de huéspedes.
+45. **bathrooms** — Cuantitativa continua. Número de baños disponibles.
+46. **bedrooms** — Cuantitativa discreta. Número de habitaciones.
+47. **beds** — Cuantitativa discreta. Número de camas disponibles.
+48. **minimum_nights** — Cuantitativa discreta. Mínimo de noches requeridas por reserva.
+49. **maximum_nights** — Cuantitativa discreta. Máximo de noches permitidas por reserva.
+50. **minimum_minimum_nights** — Cuantitativa discreta. Mínimo histórico del mínimo de noches.
+51. **maximum_minimum_nights** — Cuantitativa discreta. Máximo histórico del mínimo de noches.
+52. **minimum_maximum_nights** — Cuantitativa discreta. Mínimo histórico del máximo de noches.
+53. **maximum_maximum_nights** — Cuantitativa discreta. Máximo histórico del máximo de noches.
+54. **minimum_nights_avg_ntm** — Cuantitativa continua. Promedio del mínimo de noches en el próximo mes.
+55. **maximum_nights_avg_ntm** — Cuantitativa continua. Promedio del máximo de noches en el próximo mes.
+56. **has_availability** — Cualitativa nominal. Indica si el listing tiene disponibilidad activa (t/f).
+57. **availability_30** — Cuantitativa discreta. Días disponibles en los próximos 30 días.
+58. **availability_60** — Cuantitativa discreta. Días disponibles en los próximos 60 días.
+59. **availability_90** — Cuantitativa discreta. Días disponibles en los próximos 90 días.
+60. **availability_365** — Cuantitativa discreta. Días disponibles en los próximos 365 días.
+61. **availability_eoy** — Cuantitativa discreta. Días disponibles hasta fin de año.
+62. **instant_bookable** — Cualitativa nominal. Indica si se puede reservar sin aprobación previa (t/f).
+63. **number_of_reviews** — Cuantitativa discreta. Total de reseñas recibidas.
+64. **number_of_reviews_ltm** — Cuantitativa discreta. Reseñas en los últimos 12 meses.
+65. **number_of_reviews_l30d** — Cuantitativa discreta. Reseñas en los últimos 30 días.
+66. **number_of_reviews_ly** — Cuantitativa discreta. Reseñas en el último año.
+67. **review_scores_rating** — Cuantitativa continua. Puntuación general promedio del listing.
+68. **review_scores_accuracy** — Cuantitativa continua. Puntuación de precisión del anuncio.
+69. **review_scores_cleanliness** — Cuantitativa continua. Puntuación de limpieza.
+70. **review_scores_checkin** — Cuantitativa continua. Puntuación del proceso de check-in.
+71. **review_scores_communication** — Cuantitativa continua. Puntuación de comunicación con el anfitrión.
+72. **review_scores_location** — Cuantitativa continua. Puntuación de la ubicación.
+73. **review_scores_value** — Cuantitativa continua. Puntuación de relación calidad-precio.
+74. **reviews_per_month** — Cuantitativa continua. Promedio de reseñas recibidas por mes.
+75. **estimated_occupancy_l365d** — Cuantitativa discreta. Noches estimadas ocupadas en los últimos 365 días.
+76. **estimated_revenue_l365d** — Cuantitativa continua. Ingresos estimados en los últimos 365 días.
+77. **calculated_host_listings_count** — Cuantitativa discreta. Total de listings del anfitrión en el dataset.
+78. **calculated_host_listings_count_entire_homes** — Cuantitativa discreta. Listings de tipo "entire home" del anfitrión.
+79. **calculated_host_listings_count_private_rooms** — Cuantitativa discreta. Listings de tipo "private room" del anfitrión.
+80. **calculated_host_listings_count_shared_rooms** — Cuantitativa discreta. Listings de tipo "shared room" del anfitrión.
+
+### **Preprocesamiento de Datos - Bryan**
+
+Manipulaciones a realizar en el dataset:
+
+
+- Se eliminan `id`, `listing_url`, `scrape_id`, `picture_url`, `host_id`, `host_url`, `host_thumbnail_url` y `host_picture_url`. Estas variables son enlaces web e identificadores internos de la plataforma. Un link no tiene ningún peso numérico que pueda relacionarse con el precio de una propiedad; su valor es puramente técnico y no refleja ninguna característica del alojamiento que un modelo pueda aprender.
+
+- Se eliminan `name`, `description`, `neighborhood_overview`, `host_about`, `host_name`, `host_location`, `amenities` y `host_verifications`. Los modelos de regresión lineal requieren exclusivamente variables cuantitativas. Las variables de texto libre no pueden ser interpretadas directamente por este tipo de modelo, por lo que su inclusión no es posible sin transformaciones complejas fuera del alcance de este análisis.
+
+- Se eliminan `source`, `last_scraped`, `calendar_last_scraped` y `calendar_updated`. Estos campos registran información técnica sobre el proceso de recolección de datos de Airbnb. Al momento de buscar una propiedad, el origen del dato o la fecha en que fue extraído de la plataforma no son factores que influyan en el precio del alojamiento.
+
+- Se eliminan `host_since`, `first_review` y `last_review`. Bajo la misma lógica anterior, una fecha en formato texto no aporta directamente a la predicción del precio. La antigüedad del anfitrión o el historial de reseñas son conceptos que podrían ser útiles si se transformaran en variables numéricas (e.g., días desde registro), pero en su forma cruda no son utilizables en regresión lineal.
+
+- Se eliminan `bathrooms_text` (versión textual de `bathrooms`, que ya está como número), `host_total_listings_count` (muy similar a `host_listings_count`), `neighbourhood` (duplicado no estandarizado de `neighbourhood_cleansed`), `minimum_nights_avg_ntm` y `maximum_nights_avg_ntm` (promedios de variables que ya están en el dataset), `number_of_reviews_ltm`, `number_of_reviews_l30d` y `number_of_reviews_ly` (fragmentaciones de `number_of_reviews`), y `calculated_host_listings_count_entire_homes`, `calculated_host_listings_count_private_rooms` y `calculated_host_listings_count_shared_rooms` (que en conjunto suman a `calculated_host_listings_count`). Al estar buscando una propiedad en Airbnb, estos valores no son criterios que un usuario considere al tomar su decisión, por lo que no se espera que aporten capacidad explicativa al modelo.
+
+- `estimated_revenue_l365d` esta variable se elimina porque puede calcularse directamente a partir de `price` (precio × noches ocupadas). Incluirla en el modelo introduciría una fuga de datos: el modelo estaría usando información derivada de la variable que intenta predecir, lo que llevaría a métricas artificialmente buenas y a un modelo que no generaliza correctamente a datos nuevos.
+
+- Se eliminan `host_has_profile_pic` y `neighbourhood_group_cleansed`. En ambos casos, la gran mayoría de registros comparten el mismo valor, por lo que estas variables prácticamente no aportan variación que el modelo pueda aprovechar para mejorar sus estimaciones.
+
+- La variable objetivo `price` está almacenada como texto con formato `"$97.00"`. Se convierte a numérica eliminando el símbolo `$` y las comas para que pueda ser utilizada en el modelo.
+
+```{r preprocesamiento}
+# Convertir price a numérico
+listings$price <- as.numeric(gsub("[$,]", "", listings$price))
+
+# Variables a eliminar
+vars_eliminar <- c(
+  # URLs e identificadores
+  "id", "listing_url", "scrape_id", "picture_url",
+  "host_id", "host_url", "host_thumbnail_url", "host_picture_url",
+  # Texto libre
+  "name", "description", "neighborhood_overview", "host_about",
+  "host_name", "host_location", "amenities", "host_verifications",
+  # Metadatos de scraping
+  "source", "last_scraped", "calendar_last_scraped", "calendar_updated",
+  # Fechas crudas
+  "host_since", "first_review", "last_review",
+  # Redundantes o de bajo valor
+  "bathrooms_text", "host_total_listings_count", "neighbourhood",
+  "minimum_nights_avg_ntm", "maximum_nights_avg_ntm",
+  "number_of_reviews_ltm", "number_of_reviews_l30d", "number_of_reviews_ly",
+  "calculated_host_listings_count_entire_homes",
+  "calculated_host_listings_count_private_rooms",
+  "calculated_host_listings_count_shared_rooms",
+  # Data leakage
+  "estimated_revenue_l365d",
+  # Baja variabilidad
+  "host_has_profile_pic", "neighbourhood_group_cleansed"
+)
+
+# Dataset nuevo a utilizar
+listings_clean <- listings[, !(names(listings) %in% vars_eliminar)]
+
+cat("Variables originales:", ncol(listings), "\n")
+cat("Variables después del preprocesamiento:", ncol(listings_clean), "\n")
+```
+
+### **Análisis Estadístico - Nery**
+
+Análisis sobre estadísticas de orden y distribución. Dar gráficos, tablas y dar conclusiones signfiicativas.
+
+### **Análisis de Grupos -- Bryan**
+
+Explique las características de cada uno.
+
+## **División del Set de Datos - Adriana**
+
+Describa el criterio que usó para crear los conjuntos: número de filas de cada uno, estratificado o no, balanceado o no, etc. PONER SEMILLA SI NO VALIÓ jaja
+
+## **Ingeniería de Características - Nery**
+
+Haga ingeniería de características, ¿qué variables cree que puedan ser mejores predictores para el precio de las casas? Explique en que basó la selección o no de las variables.
 
