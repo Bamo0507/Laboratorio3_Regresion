@@ -11,6 +11,8 @@ output:
 knitr::opts_chunk$set(echo = TRUE)
 library(nortest)
 library(tidyr)
+library(ggplot2)
+library(cluster)
 load("listings.RData")
 ```
 
@@ -19,16 +21,13 @@ load("listings.RData")
 ls()
 str(listings)
 head(listings, 5)
-write.csv(listings, "listings.csv", row.names = FALSE)
 ```
 
 ## **Análisis Exploratorio**
 
-### **Descripción de Variables - Adriana**
+### **Descripción de Variables**
 
 El dataset cuenta con 80 variables. A continuación se describen todas, indicando tipo, subtipo y su rol en el análisis.
-
-**Variable objetivo:**
 
 1. **price** — Cuantitativa continua. Precio por noche del alojamiento (en dólares). *Variable objetivo.*
 2. **id** — Cuantitativa discreta. Identificador único del listing.
@@ -111,7 +110,7 @@ El dataset cuenta con 80 variables. A continuación se describen todas, indicand
 79. **calculated_host_listings_count_private_rooms** — Cuantitativa discreta. Listings de tipo "private room" del anfitrión.
 80. **calculated_host_listings_count_shared_rooms** — Cuantitativa discreta. Listings de tipo "shared room" del anfitrión.
 
-### **Preprocesamiento de Datos - Bryan**
+### **Preprocesamiento de Datos**
 
 Manipulaciones a realizar en el dataset:
 
@@ -172,9 +171,95 @@ cat("Variables después del preprocesamiento:", ncol(listings_clean), "\n")
 
 Análisis sobre estadísticas de orden y distribución. Dar gráficos, tablas y dar conclusiones signfiicativas.
 
-### **Análisis de Grupos -- Bryan**
+### **Análisis de Grupos**
 
-Explique las características de cada uno.
+```{r}
+numericas <- listings_clean[, sapply(listings_clean, is.numeric)]
+numericas <- numericas[, !names(numericas) %in% "price"]
+
+numericas_completas <- na.omit(numericas)
+numericas_scaled <- scale(numericas_completas)
+```
+
+#### Determinar k — Método del Codo
+
+```{r elbow}
+set.seed(42)
+wss <- sapply(1:10, function(k) {
+  kmeans(numericas_scaled, centers = k, nstart = 25)$tot.withinss
+})
+
+plot(1:10, wss, type = "b", pch = 19,
+     xlab = "Número de clústeres (k)",
+     ylab = "WSS total",
+     main = "Método del Codo")
+```
+
+El método del codo no permite identificar con claridad un valor de k en el que la inercia se estabilice, ya que la curva desciende de forma continua sin mostrar un quiebre pronunciado. Por esta razón, se complementa el análisis con el método de la silueta.
+
+#### Determinar k — Método de la Silueta
+
+```{r silhouette}
+set.seed(42)
+idx_sil <- sample(nrow(numericas_scaled), 500)
+numericas_sil <- numericas_scaled[idx_sil, ]
+dist_sil <- dist(numericas_sil)
+
+sil_avg <- sapply(2:10, function(k) {
+  km <- kmeans(numericas_sil, centers = k, nstart = 25)
+  ss <- silhouette(km$cluster, dist_sil)
+  mean(ss[, 3])
+})
+
+plot(2:10, sil_avg, type = "b", pch = 19,
+     xlab = "Número de clústeres (k)",
+     ylab = "Silueta promedio",
+     main = "Método de la Silueta")
+abline(v = which.max(sil_avg) + 1, col = "red", lty = 2)
+```
+
+```{r}
+set.seed(42)
+k <- 2
+modelo_kmeans <- kmeans(numericas_scaled, centers = k, nstart = 25)
+
+datos_cluster <- numericas_completas
+datos_cluster$cluster <- as.factor(modelo_kmeans$cluster)
+
+price_completo <- listings_clean$price[as.numeric(rownames(numericas_completas))]
+datos_cluster$price <- price_completo
+```
+
+#### Distribución de precio por clúster
+
+```{r boxplot-clusters}
+boxplot(price ~ cluster, data = datos_cluster,
+        main = "Distribución de precio por clúster",
+        xlab = "Clúster", ylab = "Precio por noche ($)",
+        col = c("#4e79a7", "#f28e2b", "#e15759"))
+```
+
+#### Perfil promedio de cada clúster
+
+```{r perfil-clusters}
+perfil <- aggregate(. ~ cluster, data = datos_cluster, FUN = mean)
+t(perfil)
+```
+
+#### Discusión sobre grupos
+
+El análisis de k-means con k=2 identificó dos grupos.
+
+**Clúster 1 — Propiedades populares y accesibles**
+
+Este grupo presenta un precio promedio de \$404 por noche, una ocupación estimada muy alta (95 noches al año), y puntuaciones de reseñas excelentes en todas las dimensiones (alrededor de 4.8/5). Los anfitriones manejan en promedio 92 listings, y las propiedades acumulan un número considerable de reseñas (67 en promedio) con una tasa de 1.6 reseñas por mes. La disponibilidad anual es menor (229 días), lo que es consistente con la alta ocupación. Se trata de propiedades bien gestionadas, con buena reputación y alta demanda, que logran ocupación sostenida a precios moderados.
+
+**Clúster 2 — Propiedades premium con bajo desempeño**
+
+Este grupo tiene un precio promedio significativamente mayor (alrededor de $1,073 por noche), pero con una ocupación estimada muy baja (26 noches al año) y calificaciones considerablemente peores (entre 3.3 y 4.0/5). Los anfitriones de este grupo manejan en promedio 422 listings, lo que sugiere la presencia de grandes empresas administradoras de propiedades. El número de reseñas es muy bajo (3.6 en promedio) y la disponibilidad anual es mayor (262 días), reflejando que las propiedades permanecen desocupadas gran parte del tiempo. Este grupo representa precisamente el perfil de propiedades con bajo desempeño que SmartStay Advisors busca identificar para mejorar su ocupación.
+
+Esta segmentación es relevante para el objetivo del laboratorio: el precio por sí solo no garantiza ocupación. Las propiedades del Clúster 1, aunque más económicas, son las que mejor desempeño real muestran.
+
 
 ## **División del Set de Datos - Adriana**
 
