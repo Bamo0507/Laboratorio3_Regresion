@@ -261,9 +261,25 @@ Este grupo tiene un precio promedio significativamente mayor (alrededor de $1,07
 Esta segmentación es relevante para el objetivo del laboratorio: el precio por sí solo no garantiza ocupación. Las propiedades del Clúster 1, aunque más económicas, son las que mejor desempeño real muestran.
 
 
-## **División del Set de Datos - Adriana**
+## **División del Set de Datos**
 
-Describa el criterio que usó para crear los conjuntos: número de filas de cada uno, estratificado o no, balanceado o no, etc. PONER SEMILLA SI NO VALIÓ jaja
+El dataset se dividió en dos conjuntos: 70% para entrenamiento y 30% para prueba. Esta distribución fue seleccionada porque, tal como se discutió en clase, representa un balance buen punto para conseguir modelos que sean capaces de generalizar y no se ven sobreajustados.
+
+La partición se realizó con `createDataPartition`, que garantiza que la distribución de la variable objetivo `price` se mantenga proporcional en ambos conjuntos, esto sería partición estratificada. Antes de dividir, se eliminan las filas con valores faltantes en `price`, esto para poder corroborar la calidad del modelo más adelante. 
+
+```{r division}
+# Eliminar filas sin precio
+listings_model <- listings_clean[!is.na(listings_clean$price), ]
+
+set.seed(42)
+trainIndex <- sample(seq_len(nrow(listings_model)), size = floor(0.7 * nrow(listings_model)))
+train <- listings_model[ trainIndex, ]
+test  <- listings_model[-trainIndex, ]
+
+cat("Total de filas utilizables:", nrow(listings_model), "\n")
+cat("Datos entrenamiento:", nrow(train), "\n")
+cat("Datos prueba:", nrow(test), "\n")
+```
 
 ## **Ingeniería de Características - Nery**
 
