@@ -1472,3 +1472,105 @@ if (nrow(coef_lasso_tbl) > 0) {
 
 cat("7. En general, si un modelo regularizado supera o iguala a la regresión lineal tradicional en el set de prueba, se prefiere porque suele ser más robusto frente a multicolinealidad, sobreajuste y exceso de variables dummy. Para este problema, eso es especialmente útil porque hay variables continuas correlacionadas entre sí y variables categóricas convertidas en múltiples indicadores.\n")
 ```
+
+## **12. Evaluación de eficiencia con el conjunto de prueba**
+
+En esta parte se mide qué tan bien predijo cada modelo el precio de las casas cuando se enfrentó a datos que no vio durante el entrenamiento. Para evaluar la calidad de la predicción se usan tres métricas:
+
+- **RMSE**: penaliza más los errores grandes, por lo que es útil cuando interesa detectar modelos que se equivocan mucho en propiedades muy caras.
+- **MAE**: mide el error absoluto promedio en dólares, por lo que se interpreta de forma más directa.
+- **R²**: indica qué proporción de la variabilidad del precio logra explicar el modelo.
+
+```{r evaluacion-test-modelos, message=FALSE, warning=FALSE}
+mae_simple <- function(obs, pred) mean(abs(obs - pred), na.rm = TRUE)
+
+metricas_lineales <- tibble(
+  modelo = c("Univariado (accommodates)", "Lineal completo", "Lineal depurado"),
+  conjunto_prueba = c("70/30", "70/30", "70/30"),
+  RMSE = c(rmse_uni, rmse_full, rmse_mejor_test),
+  MAE = c(
+    mae_simple(test$price, pred_uni),
+    mae_simple(test_num$price, pred_full),
+    mae_simple(test_mejor$price, pred_mejor_test)
+  ),
+  R2 = c(r2_uni, r2_full, r2_mejor_test)
+)
+
+metricas_regularizados <- comparacion_modelos %>%
+  mutate(
+    conjunto_prueba = "80/20",
+    RMSE = as.numeric(RMSE),
+    MAE = as.numeric(MAE),
+    R2 = as.numeric(R2)
+  ) %>%
+  select(modelo, conjunto_prueba, RMSE, MAE, R2)
+
+metricas_todos <- bind_rows(metricas_lineales, metricas_regularizados) %>%
+  mutate(
+    RMSE = round(RMSE, 3),
+    MAE = round(MAE, 3),
+    R2 = round(R2, 4)
+  )
+
+knitr::kable(metricas_todos, caption = "Desempeño de todos los modelos en sus respectivos conjuntos de prueba")
+
+mejor_lineal_rmse <- metricas_lineales %>% arrange(RMSE) %>% slice(1)
+mejor_regularizado_rmse <- metricas_regularizados %>% arrange(RMSE) %>% slice(1)
+mejor_global_aprox <- metricas_todos %>% arrange(RMSE) %>% slice(1)
+```
+
+```{r grafico-rmse-todos, fig.height=5, fig.width=8}
+metricas_todos %>%
+  ggplot(aes(x = reorder(modelo, RMSE), y = RMSE, fill = conjunto_prueba)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "RMSE de los modelos en prueba",
+    x = "Modelo",
+    y = "RMSE"
+  ) +
+  theme_minimal()
+```
+
+```{r grafico-r2-todos, fig.height=5, fig.width=8}
+metricas_todos %>%
+  ggplot(aes(x = reorder(modelo, R2), y = R2, fill = conjunto_prueba)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "R² de los modelos en prueba",
+    x = "Modelo",
+    y = "R²"
+  ) +
+  theme_minimal()
+```
+
+```{r interpretacion-evaluacion-test, results='asis'}
+cat("### Interpretación de la eficiencia predictiva\n\n")
+
+cat(paste0("1. Entre los modelos lineales evaluados con partición **70/30**, el mejor según RMSE fue **",
+           mejor_lineal_rmse$modelo,
+           "**, con un RMSE de **", round(mejor_lineal_rmse$RMSE, 2),
+           "**. Esto indica que, dentro de esa familia, fue el que cometió los errores grandes menos severos.\n\n"))
+
+cat(paste0("2. En la comparación controlada entre modelos con la misma partición **80/20** y el mismo conjunto de predictores, el mejor según RMSE fue **",
+           mejor_regularizado_rmse$modelo,
+           "**, con RMSE de **", round(mejor_regularizado_rmse$RMSE, 2),
+           "**. Esta es la comparación más justa para decidir si la regularización realmente ayudó.\n\n"))
+
+cat("3. Las medidas utilizadas fueron **RMSE**, **MAE** y **R²**. Se usaron porque se complementan bien: RMSE castiga más los errores grandes, MAE expresa el error promedio en dólares y R² resume cuánto del comportamiento del precio logra explicar cada modelo.\n\n")
+
+cat(paste0("4. Si se observa la tabla completa, el mejor RMSE global reportado fue **",
+           mejor_global_aprox$modelo,
+           "** con **", round(mejor_global_aprox$RMSE, 2),
+           "**. Sin embargo, esta comparación global debe interpretarse con cuidado porque no todos los modelos fueron evaluados con la misma partición de prueba.\n\n"))
+
+r2_max <- max(metricas_todos$R2, na.rm = TRUE)
+if (r2_max < 0.15) {
+  cat("5. En general, los valores de R² siguen siendo bajos, por lo que ningún modelo explica una proporción alta de la variabilidad del precio. Esto sugiere que el precio de las casas depende de factores adicionales o de relaciones no lineales que la regresión lineal simple o penalizada no alcanza a capturar completamente.\n")
+} else if (r2_max < 0.40) {
+  cat("5. Los valores de R² muestran una capacidad explicativa moderada. Los modelos sí capturan parte del comportamiento del precio, pero todavía queda una fracción importante de variabilidad sin explicar.\n")
+} else {
+  cat("5. Los valores de R² indican que el mejor modelo ya logra una capacidad explicativa relativamente alta para este problema.\n")
+}
+```
