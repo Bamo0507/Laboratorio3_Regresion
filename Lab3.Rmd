@@ -23,6 +23,10 @@ str(listings)
 head(listings, 5)
 ```
 
+## **Repositorio**
+
+https://github.com/Bamo0507/Laboratorio3_Regresion
+
 ## **Análisis Exploratorio**
 
 ### **Descripción de Variables**
@@ -167,7 +171,7 @@ cat("Variables originales:", ncol(listings), "\n")
 cat("Variables después del preprocesamiento:", ncol(listings_clean), "\n")
 ```
 
-### **Análisis Estadístico - Nery**
+### **Análisis Estadístico**
 
 ```{r analisis-estadistico-nery-setup, message=FALSE, warning=FALSE}
 library(dplyr)
@@ -555,12 +559,19 @@ cat(paste0("En conjunto, las variables que parecen tener mayor valor explicativo
 
 ### **Análisis de Grupos**
 
-```{r}
+Para identificar grupos dentro del dataset se aplica el algoritmo k-means sobre las variables numéricas que se tienen todavía en listings_clean, dataset en donde se realizó limpieza y excluyendo a la variable price para tratar de identificar grupos sin involucrar a la variable objetivo. Debido al tamaño del dataset, se trabaja con una muestra aleatoria de 2,000 observaciones.
+
+```{r clustering-setup}
+set.seed(42)
 numericas <- listings_clean[, sapply(listings_clean, is.numeric)]
 numericas <- numericas[, !names(numericas) %in% "price"]
 
 numericas_completas <- na.omit(numericas)
-numericas_scaled <- scale(numericas_completas)
+
+# Muestra para todo el análisis de clustering
+idx_muestra <- sample(nrow(numericas_completas), 2000)
+numericas_muestra <- numericas_completas[idx_muestra, ]
+numericas_scaled <- scale(numericas_muestra)
 ```
 
 #### Determinar k — Método del Codo
@@ -582,13 +593,10 @@ El método del codo no permite identificar con claridad un valor de k en el que 
 #### Determinar k — Método de la Silueta
 
 ```{r silhouette}
-set.seed(42)
-idx_sil <- sample(nrow(numericas_scaled), 500)
-numericas_sil <- numericas_scaled[idx_sil, ]
-dist_sil <- dist(numericas_sil)
+dist_sil <- dist(numericas_scaled)
 
 sil_avg <- sapply(2:10, function(k) {
-  km <- kmeans(numericas_sil, centers = k, nstart = 25)
+  km <- kmeans(numericas_scaled, centers = k, nstart = 25)
   ss <- silhouette(km$cluster, dist_sil)
   mean(ss[, 3])
 })
@@ -600,16 +608,16 @@ plot(2:10, sil_avg, type = "b", pch = 19,
 abline(v = which.max(sil_avg) + 1, col = "red", lty = 2)
 ```
 
-```{r}
+```{r kmeans-final}
 set.seed(42)
 k <- 2
 modelo_kmeans <- kmeans(numericas_scaled, centers = k, nstart = 25)
 
-datos_cluster <- numericas_completas
+datos_cluster <- as.data.frame(numericas_muestra)
 datos_cluster$cluster <- as.factor(modelo_kmeans$cluster)
 
-price_completo <- listings_clean$price[as.numeric(rownames(numericas_completas))]
-datos_cluster$price <- price_completo
+price_muestra <- listings_clean$price[idx_muestra]
+datos_cluster$price <- price_muestra
 ```
 
 #### Distribución de precio por clúster
@@ -672,8 +680,8 @@ Para predecir el precio por noche (`price`), no conviene quedarse solo con las v
 Las variables con mayor potencial para explicar el precio son las que describen el tamaño del alojamiento, su tipo, su ubicación y parte de su reputación:
 
 - Tamaño y capacidad: `accommodates`, `bathrooms`, `bedrooms`, `beds`.
-- Tipo de alojamiento: `room_type`, `property_type`.
-- Ubicación:** `neighbourhood_cleansed`, `latitude`, `longitude`.
+- Tipo de alojamiento: `room_type`, `property_type` — aunque son variables categóricas y no entran directamente en regresión lineal, se incluyen aquí como referencia ya que el análisis estadístico mostró que segmentan claramente el precio. Para incluirlas en un modelo futuro se requeriría codificación dummy.
+- Ubicación: `latitude`, `longitude`.
 - Reputación y operación: `review_scores_rating`, `reviews_per_month`, `host_is_superhost`, `instant_bookable`, `host_response_rate`, `host_acceptance_rate`.
 - Condiciones de reserva: `minimum_nights`.
 
@@ -784,4 +792,210 @@ predictores_sugeridos <- tibble(
 
 knitr::kable(predictores_sugeridos, caption = "Predictores sugeridos para modelar price")
 ```
+
+## **Modelo de Regresión Lineal Univariado**
+
+Para este tomaremos la variable `accommodates`, esta indica el número máximo de huéspedes que acepta una propiedad. Se eligió como predictor univariado porque a partir de este dato es posible hacerse una idea del tamaño y la calidad del espacio: una propiedad que acepta más huéspedes probablemente cuenta con más habitaciones, camas más grandes y mayor infraestructura en general. Por ejemplo, un listing que acepta 8 personas difícilmente tendrá camas individuales o un espacio reducido, lo que implica una propiedad de mayor escala y, por ende, de mayor valor. Con una sola variable es posible capturar indirectamente varios atributos físicos del alojamiento.
+
+#### Ajuste del modelo
+
+```{r modelo-univariado}
+modelo_uni <- lm(price ~ accommodates, data = train)
+summary(modelo_uni)
+```
+
+El coeficiente de `accommodates` es 141.60 y es estadísticamente significativo (p < 2e-16), lo que indica que por cada huésped adicional que acepta la propiedad, el precio estimado aumenta en promedio 141.60 dólares. Sin embargo, el R2 de 0.0103 revela que el modelo solo explica el 1% de la variabilidad del precio, lo que señala que `accommodates` por sí sola es un predictor muy limitado y que gran parte del precio depende de factores no incluidos en este modelo.
+
+#### Supuestos del modelo
+
+**Linealidad**
+
+```{r supuesto-linealidad-uni}
+plot(modelo_uni$fitted.values, resid(modelo_uni),
+     main = "Residuos vs Valores Ajustados",
+     xlab = "Valores ajustados", ylab = "Residuos",
+     pch = 19, col = rgb(0, 0, 1, 0.3))
+abline(h = 0, col = "red", lwd = 2)
+```
+
+Los residuos no se distribuyen de forma aleatoria alrededor de cero: la nube se concentra por encima de la línea roja, con varios valores extremos que alcanzan hasta 50,000. Los puntos se agrupan en bandas verticales debido a la naturaleza discreta de `accommodates`, y se aprecia una dispersión creciente con los valores ajustados, lo que sugiere heterocedasticidad y posible sesgo sistemático en las predicciones.
+
+**Normalidad de residuos**
+
+```{r supuesto-normalidad-uni}
+qqnorm(resid(modelo_uni), main = "QQ-Plot de Residuos")
+qqline(resid(modelo_uni), col = "red", lwd = 2)
+shapiro.test(sample(resid(modelo_uni), 5000))
+```
+
+La prueba de Shapiro-Wilk arroja W = 0.135 con p-value < 2.2e-16, por lo que se rechaza H0 de normalidad. Los residuos presentan una distribución fuertemente sesgada a la derecha, impulsada por la presencia de precios extremadamente altos en el dataset. Este incumplimiento afecta la validez de la inferencia estadística del modelo.
+
+**Homocedasticidad**
+
+```{r supuesto-homo-uni}
+library(lmtest)
+bptest(modelo_uni)
+```
+
+La prueba de Breusch-Pagan arroja BP = 76.57 con p-value < 2.2e-16, rechazando H0 de varianza constante. Existe heterocedasticidad: la varianza de los errores no es uniforme a lo largo de los valores de `accommodates`, lo que invalida los errores estándar del modelo y compromete la confiabilidad de los intervalos de confianza.
+
+**Independencia**
+
+```{r supuesto-independencia-uni}
+dwtest(modelo_uni)
+```
+
+La prueba de Durbin-Watson arroja DW = 2.005 con p-value = 0.724, por lo que no se rechaza H0. No hay evidencia de autocorrelación de primer orden en los residuos, siendo este el único supuesto que el modelo cumple satisfactoriamente.
+
+#### Visualización del modelo
+
+```{r grafico-modelo-uni}
+plot(train$accommodates, train$price,
+     main = "Regresión Lineal: price ~ accommodates",
+     xlab = "Número de huéspedes (accommodates)",
+     ylab = "Precio por noche ($)",
+     pch = 19, col = rgb(0, 0, 1, 0.3))
+abline(modelo_uni, col = "red", lwd = 2)
+```
+
+La recta de regresión muestra una pendiente positiva, confirmando que a mayor capacidad de huéspedes, mayor precio estimado. Sin embargo, la dispersión de los puntos es muy amplia para cada valor de `accommodates`, y se aprecian varios outliers con precios muy elevados que alejan las observaciones de la tendencia central. Esto evidencia que la variable por sí sola no es suficiente para capturar la variabilidad del precio.
+
+#### Predicción en test y métricas
+
+```{r prediccion-uni}
+pred_uni <- predict(modelo_uni, newdata = test)
+
+rmse_uni <- sqrt(mean((test$price - pred_uni)^2, na.rm = TRUE))
+r2_uni   <- 1 - sum((test$price - pred_uni)^2, na.rm = TRUE) /
+                sum((test$price - mean(test$price, na.rm = TRUE))^2, na.rm = TRUE)
+
+cat("RMSE en test:", round(rmse_uni, 2), "\n")
+cat("R2 en test:  ", round(r2_uni, 4), "\n")
+```
+
+El modelo obtiene un RMSE de 4,358.72 en test, lo que indica que en promedio el precio predicho se aleja 4,358 dólares del precio real, un error considerable dado el rango de precios del dataset. El R2 de 0.0091 confirma que el modelo explica menos del 1% de la variabilidad del precio en datos no vistos, reflejando una capacidad predictiva muy baja.
+
+#### Comparación real vs predicho
+
+```{r scatter-prediccion-uni}
+plot(test$price, pred_uni,
+     main = "Valores reales vs predichos",
+     xlab = "Precio real ($)", ylab = "Precio predicho ($)",
+     pch = 19, col = rgb(0, 0.5, 0, 0.3))
+abline(a = 0, b = 1, col = "red", lwd = 2)
+```
+
+Las predicciones se concentran en un rango mucho más estrecho que los valores reales, evidenciando que el modelo subestima sistemáticamente los precios altos. La mayoría de los puntos se alejan considerablemente de la línea diagonal ideal, lo que confirma que un modelo con una sola variable no logra capturar la complejidad del precio en este dataset.
+
+#### Conclusión
+
+Los resultados obtenidos sugieren que `accommodates`, si bien tiene una relación estadísticamente significativa con el precio, resulta ser un predictor débil en la práctica. Una razón que puede explicar esto es que la capacidad de huéspedes no necesariamente refleja la calidad del espacio: una propiedad puede aceptar muchos huéspedes pero lograrlo mediante sofacamas, literas o múltiples camas individuales en habitaciones pequeñas, lo que no se traduce en un precio más alto. En ese sentido, dos propiedades con el mismo valor de `accommodates` pueden diferir enormemente en comodidad, privacidad y calidad, y por ende en precio. 
+
+### **Modelo con Todas las Variables Numéricas**
+
+```{r modelo-completo-setup}
+# Seleccionar solo variables numéricas
+vars_num <- names(train)[sapply(train, is.numeric)]
+
+train_num <- train[, vars_num]
+test_num  <- test[, vars_num]
+
+# Eliminar filas con NAs
+train_num <- na.omit(train_num)
+test_num  <- na.omit(test_num)
+
+cat("Filas en train tras eliminar NAs:", nrow(train_num), "\n")
+cat("Filas en test tras eliminar NAs: ", nrow(test_num), "\n")
+cat("Variables en el modelo:", ncol(train_num) - 1, "\n")
+```
+
+#### Ajuste del modelo
+
+```{r modelo-completo}
+modelo_full <- lm(price ~ ., data = train_num)
+summary(modelo_full)
+```
+
+El modelo con todas las variables numéricas obtiene un R2 de 0.0928, explicando el 9.3% de la variabilidad del precio, una mejora notable respecto al modelo univariado pero aún muy malo. Entre los predictores significativos destacan `host_listings_count`, `accommodates`, `bathrooms`, `beds`, `review_scores_cleanliness` y `review_scores_location`. Por otro lado, variables como `minimum_maximum_nights`, `maximum_maximum_nights`, `availability_30`, `availability_60` y `number_of_reviews` no resultan significativas, lo que indica que no aportan información adicional al modelo en presencia de las demás variables.
+
+#### Supuestos del modelo
+
+**Linealidad**
+
+```{r linealidad-full}
+plot(modelo_full$fitted.values, resid(modelo_full),
+     main = "Residuos vs Valores Ajustados",
+     xlab = "Valores ajustados", ylab = "Residuos",
+     pch = 19, col = rgb(0, 0, 1, 0.3))
+abline(h = 0, col = "red", lwd = 2)
+```
+
+Los residuos muestran una estructura no aleatoria con bandas diagonales y dispersión creciente, evidenciando heterocedasticidad y posible mala especificación del modelo. Se observan predicciones negativas, lo cual no es interpretable para una variable de precio, y residuos extremos cercanos a 50,000 que reflejan la presencia de outliers con alto impacto en el ajuste. El supuesto de linealidad parece no cumplirse.
+
+**Normalidad de residuos**
+
+```{r normalidad-full}
+qqnorm(resid(modelo_full), main = "QQ-Plot de Residuos")
+qqline(resid(modelo_full), col = "red", lwd = 2)
+shapiro.test(sample(resid(modelo_full), 5000))
+```
+
+La prueba de Shapiro-Wilk arroja W = 0.146 con p-value < 2.2e-16, rechazando H0 de normalidad. Al igual que en el modelo univariado, los residuos presentan una distribución fuertemente asimétrica hacia la derecha.
+
+**Homocedasticidad**
+
+```{r homo-full}
+bptest(modelo_full)
+```
+
+La prueba de Breusch-Pagan arroja BP = 3676.8 con p-value < 2.2e-16, rechazando H0 con contundencia. La heterocedasticidad es mucho más pronunciada que en el modelo univariado, lo que indica que agregar más variables no resolvió el problema de varianza no constante, sino que lo amplificó al incorporar predictores con escalas y distribuciones muy distintas.
+
+**Independencia**
+
+```{r independencia-full}
+dwtest(modelo_full)
+```
+
+La prueba de Durbin-Watson arroja DW = 2.008 con p-value = 0.809, por lo que no se rechaza H0. Al igual que en el modelo univariado, no hay evidencia de autocorrelación en los residuos, siendo este el único supuesto que se cumple en ambos modelos.
+
+#### Predicción en test y métricas
+
+```{r prediccion-full}
+pred_full <- predict(modelo_full, newdata = test_num)
+
+rmse_full <- sqrt(mean((test_num$price - pred_full)^2, na.rm = TRUE))
+r2_full   <- 1 - sum((test_num$price - pred_full)^2, na.rm = TRUE) /
+                 sum((test_num$price - mean(test_num$price, na.rm = TRUE))^2, na.rm = TRUE)
+
+cat("RMSE en test:", round(rmse_full, 2), "\n")
+cat("R2 en test:  ", round(r2_full, 4), "\n")
+```
+
+El modelo obtiene un RMSE de 2,577.94 y un R2 de 0.1071 en test, lo que representa una mejora respecto al modelo univariado en ambas métricas. Sin embargo, el error sigue siendo muy elevado y la variabilidad explicada es baja, lo que confirma que las variables numéricas disponibles no son suficientes por sí solas para predecir el precio con precisión.
+
+#### Comparación real vs predicho
+
+```{r scatter-full}
+plot(test_num$price, pred_full,
+     main = "Valores reales vs predichos — Modelo completo",
+     xlab = "Precio real ($)", ylab = "Precio predicho ($)",
+     pch = 19, col = rgb(0, 0.5, 0, 0.3))
+abline(a = 0, b = 1, col = "red", lwd = 2)
+```
+
+Las predicciones siguen concentradas en un rango mucho más estrecho que los valores reales, con subestimación sistemática de los precios altos y presencia de predicciones negativas. Los puntos no siguen la línea diagonal ideal, confirmando la baja capacidad del modelo para generalizar en datos no vistos.
+
+#### Comparación con modelo univariado
+
+```{r comparacion-modelos}
+comparacion <- data.frame(
+  Modelo = c("Univariado (accommodates)", "Todas las variables numéricas"),
+  RMSE   = c(round(rmse_uni, 2), round(rmse_full, 2)),
+  R2     = c(round(r2_uni, 4),   round(r2_full, 4))
+)
+knitr::kable(comparacion, caption = "Comparación de modelos en test")
+```
+
+
+
 
