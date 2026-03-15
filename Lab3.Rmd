@@ -1194,5 +1194,281 @@ knitr::kable(comparacion_final, caption = "Comparación final de modelos en test
 
 El modelo con mejores predictores obtiene un RMSE de 2,580.60 y R2 de 0.1053, prácticamente idéntico al modelo completo (RMSE 2,577.94, R2 0.1071), con 15 variables en lugar de 29. Esto confirma que las variables eliminadas no aportaban capacidad predictiva real. Respecto al modelo univariado, la mejora es considerable: el RMSE se redujo en casi 1,800 dólares y el R2 aumentó diez veces. Sin embargo, los tres modelos muestran un R2 bajo, lo que sugiere que la regresión lineal sobre variables numéricas no es suficiente para capturar la complejidad del precio en este dataset y que se requerirían transformaciones o enfoques más avanzados.
 
+### ** Modelos con Regularización **
 
+Para evaluar qué tan bien se puede predecir el precio por noche (`price`), se comparan cuatro modelos construidos sobre el mismo conjunto de variables y con la misma partición de entrenamiento y prueba:
 
+1. Regresión lineal múltiple (OLS) como línea base.
+2. Ridge para reducir el efecto de la multicolinealidad sin eliminar variables.
+3. Lasso para penalizar y, además, realizar selección automática de variables.
+4. Elastic Net como combinación intermedia entre Ridge y Lasso.
+
+La comparación se hace con métricas en el set de prueba: RMSE, MAE y R². Para que la comparación sea justa, todos los modelos usan exactamente las mismas observaciones, el mismo split y el mismo conjunto de predictores.
+
+```{r regularizacion-setup, message=FALSE, warning=FALSE}
+library(glmnet)
+library(dplyr)
+library(ggplot2)
+
+set.seed(123)
+
+# Crear listings_fe automáticamente si todavía no existe
+if (!exists("listings_fe")) {
+  parse_pct <- function(x) as.numeric(gsub("%", "", x))
+  parse_tf <- function(x) ifelse(x == "t", 1, ifelse(x == "f", 0, NA))
+
+  listings_fe <- listings
+  listings_fe$price <- as.numeric(gsub("[$,]", "", listings_fe$price))
+
+  listings_fe <- listings_fe %>%
+    mutate(
+      host_since_date = as.Date(host_since),
+      first_review_date = as.Date(first_review),
+      last_review_date = as.Date(last_review),
+      host_antiguedad_dias = as.numeric(Sys.Date() - host_since_date),
+      dias_desde_ultima_review = as.numeric(Sys.Date() - last_review_date),
+      dias_desde_primera_review = as.numeric(Sys.Date() - first_review_date),
+      host_response_rate_num = parse_pct(host_response_rate),
+      host_acceptance_rate_num = parse_pct(host_acceptance_rate),
+      host_is_superhost_bin = parse_tf(host_is_superhost),
+      instant_bookable_bin = parse_tf(instant_bookable),
+      host_identity_verified_bin = parse_tf(host_identity_verified),
+      bathrooms_per_guest = bathrooms / pmax(accommodates, 1),
+      beds_per_bedroom = beds / pmax(bedrooms, 1),
+      bedrooms_per_guest = bedrooms / pmax(accommodates, 1),
+      log_minimum_nights = log1p(minimum_nights)
+    )
+}
+
+rmse <- function(obs, pred) {
+  sqrt(mean((obs - pred)^2))
+}
+
+mae <- function(obs, pred) {
+  mean(abs(obs - pred))
+}
+
+r2 <- function(obs, pred) {
+  1 - sum((obs - pred)^2) / sum((obs - mean(obs))^2)
+}
+
+moda_simple <- function(x) {
+  x <- x[!is.na(x)]
+  if (length(x) == 0) return(NA)
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+lump_top <- function(x, n = 10) {
+  x <- as.character(x)
+  x[is.na(x) | trimws(x) == ""] <- "Missing"
+  freqs <- sort(table(x), decreasing = TRUE)
+  keep <- names(freqs)[seq_len(min(n, length(freqs)))]
+  x[!x %in% keep] <- "Other"
+  factor(x)
+}
+
+vars_modelo <- c(
+  "price",
+  "accommodates", "bathrooms", "bedrooms", "beds",
+  "room_type", "property_type", "neighbourhood_cleansed",
+  "latitude", "longitude",
+  "review_scores_rating", "number_of_reviews",
+  "minimum_nights", "host_antiguedad_dias",
+  "bathrooms_per_guest", "beds_per_bedroom",
+  "host_is_superhost_bin", "instant_bookable_bin",
+  "host_response_rate_num"
+)
+
+modelo_df <- listings_fe %>%
+  select(all_of(vars_modelo)) %>%
+  filter(!is.na(price), is.finite(price), price > 0) %>%
+  mutate(
+    room_type = as.factor(ifelse(is.na(room_type) | trimws(room_type) == "", "Missing", as.character(room_type))),
+    property_type = lump_top(property_type, n = 8),
+    neighbourhood_cleansed = lump_top(neighbourhood_cleansed, n = 10)
+  )
+
+set.seed(123)
+idx_train <- sample(seq_len(nrow(modelo_df)), size = floor(0.8 * nrow(modelo_df)))
+train_df <- modelo_df[idx_train, ]
+test_df  <- modelo_df[-idx_train, ]
+
+num_cols <- names(train_df)[sapply(train_df, is.numeric)]
+num_pred_cols <- setdiff(num_cols, "price")
+
+for (col in num_pred_cols) {
+  mediana_col <- median(train_df[[col]], na.rm = TRUE)
+  if (!is.finite(mediana_col)) mediana_col <- 0
+  train_df[[col]][is.na(train_df[[col]])] <- mediana_col
+  test_df[[col]][is.na(test_df[[col]])] <- mediana_col
+}
+
+cat_cols <- names(train_df)[sapply(train_df, is.factor)]
+for (col in cat_cols) {
+  train_df[[col]] <- as.character(train_df[[col]])
+  test_df[[col]] <- as.character(test_df[[col]])
+  train_df[[col]][is.na(train_df[[col]]) | trimws(train_df[[col]]) == ""] <- "Missing"
+  test_df[[col]][is.na(test_df[[col]]) | trimws(test_df[[col]]) == ""] <- "Missing"
+
+  niveles <- union(unique(train_df[[col]]), unique(test_df[[col]]))
+  train_df[[col]] <- factor(train_df[[col]], levels = niveles)
+  test_df[[col]] <- factor(test_df[[col]], levels = niveles)
+}
+
+cat("Filas en entrenamiento:", nrow(train_df), "\n")
+cat("Filas en prueba:", nrow(test_df), "\n")
+cat("Número de predictores originales/ingenierizados usados:", ncol(modelo_df) - 1, "\n")
+```
+
+```{r modelos-ols-ridge-lasso-enet, message=FALSE, warning=FALSE}
+# Modelo lineal base
+modelo_lm <- lm(price ~ ., data = train_df)
+pred_lm <- predict(modelo_lm, newdata = test_df)
+
+# Matrices para glmnet
+x_train <- model.matrix(price ~ ., data = train_df)[, -1]
+y_train <- train_df$price
+x_test  <- model.matrix(price ~ ., data = test_df)[, -1]
+y_test  <- test_df$price
+
+# Ridge
+set.seed(123)
+cv_ridge <- cv.glmnet(x_train, y_train, alpha = 0, standardize = TRUE, nfolds = 10)
+pred_ridge <- as.numeric(predict(cv_ridge, s = "lambda.min", newx = x_test))
+
+# Lasso
+set.seed(123)
+cv_lasso <- cv.glmnet(x_train, y_train, alpha = 1, standardize = TRUE, nfolds = 10)
+pred_lasso <- as.numeric(predict(cv_lasso, s = "lambda.min", newx = x_test))
+
+# Elastic Net
+set.seed(123)
+alphas_enet <- seq(0.1, 0.9, by = 0.1)
+resultados_cv_enet <- lapply(alphas_enet, function(a) {
+  cv_fit <- cv.glmnet(x_train, y_train, alpha = a, standardize = TRUE, nfolds = 10)
+  list(alpha = a, cv_fit = cv_fit, cvm = min(cv_fit$cvm, na.rm = TRUE))
+})
+
+mejor_enet <- resultados_cv_enet[[which.min(sapply(resultados_cv_enet, function(z) z$cvm))]]
+cv_enet <- mejor_enet$cv_fit
+alpha_enet_final <- mejor_enet$alpha
+pred_enet <- as.numeric(predict(cv_enet, s = "lambda.min", newx = x_test))
+
+comparacion_modelos <- bind_rows(
+  tibble(
+    modelo = "Regresión lineal",
+    RMSE = rmse(y_test, pred_lm),
+    MAE = mae(y_test, pred_lm),
+    R2 = r2(y_test, pred_lm)
+  ),
+  tibble(
+    modelo = "Ridge",
+    RMSE = rmse(y_test, pred_ridge),
+    MAE = mae(y_test, pred_ridge),
+    R2 = r2(y_test, pred_ridge)
+  ),
+  tibble(
+    modelo = "Lasso",
+    RMSE = rmse(y_test, pred_lasso),
+    MAE = mae(y_test, pred_lasso),
+    R2 = r2(y_test, pred_lasso)
+  ),
+  tibble(
+    modelo = paste0("Elastic Net (alpha=", alpha_enet_final, ")"),
+    RMSE = rmse(y_test, pred_enet),
+    MAE = mae(y_test, pred_enet),
+    R2 = r2(y_test, pred_enet)
+  )
+) %>%
+  mutate(
+    RMSE = round(RMSE, 3),
+    MAE = round(MAE, 3),
+    R2 = round(R2, 4)
+  ) %>%
+  arrange(RMSE)
+
+knitr::kable(comparacion_modelos, caption = "Comparación de desempeño entre OLS, Ridge, Lasso y Elastic Net")
+```
+
+```{r grafico-comparacion-modelos, fig.height=4.5, fig.width=7}
+comparacion_modelos %>%
+  ggplot(aes(x = reorder(modelo, RMSE), y = RMSE)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Comparación de RMSE en el set de prueba",
+    x = "Modelo",
+    y = "RMSE"
+  ) +
+  theme_minimal()
+```
+
+```{r coeficientes-regularizacion, message=FALSE, warning=FALSE}
+coef_ridge <- as.matrix(coef(cv_ridge, s = "lambda.min"))
+coef_lasso <- as.matrix(coef(cv_lasso, s = "lambda.min"))
+coef_enet  <- as.matrix(coef(cv_enet,  s = "lambda.min"))
+
+conteo_coef <- tibble(
+  modelo = c("Ridge", "Lasso", paste0("Elastic Net (alpha=", alpha_enet_final, ")")),
+  lambda_min = c(cv_ridge$lambda.min, cv_lasso$lambda.min, cv_enet$lambda.min),
+  coeficientes_no_cero = c(
+    sum(abs(coef_ridge[-1, 1]) > 1e-8),
+    sum(abs(coef_lasso[-1, 1]) > 1e-8),
+    sum(abs(coef_enet[-1, 1]) > 1e-8)
+  )
+) %>%
+  mutate(lambda_min = round(lambda_min, 6))
+
+knitr::kable(conteo_coef, caption = "Penalización y cantidad de coeficientes activos")
+
+coef_lasso_tbl <- tibble(
+  variable = rownames(coef_lasso),
+  coeficiente = as.numeric(coef_lasso[, 1])
+) %>%
+  filter(variable != "(Intercept)", abs(coeficiente) > 1e-8) %>%
+  arrange(desc(abs(coeficiente)))
+
+knitr::kable(head(coef_lasso_tbl, 10), caption = "Variables más influyentes retenidas por Lasso")
+```
+
+```{r conclusiones-modelos, results='asis'}
+mejor_modelo <- comparacion_modelos %>% slice(1)
+peor_modelo <- comparacion_modelos %>% arrange(desc(RMSE)) %>% slice(1)
+
+r2_mejor <- comparacion_modelos %>% arrange(desc(R2)) %>% slice(1)
+mae_mejor <- comparacion_modelos %>% arrange(MAE) %>% slice(1)
+
+cat("### Conclusiones del modelado y regularización\n\n")
+
+cat(paste0("1. El modelo con mejor desempeño según **RMSE** en el set de prueba fue **",
+           mejor_modelo$modelo, "**, con un RMSE de **", mejor_modelo$RMSE,
+           "**. Como esta métrica penaliza más los errores grandes, este resultado sugiere que ese modelo fue el más estable para predecir `price`.\n\n"))
+
+cat(paste0("2. El mejor modelo según **MAE** fue **", mae_mejor$modelo,
+           "**, con un error absoluto medio de **", mae_mejor$MAE,
+           "** dólares. Esta métrica es útil porque se interpreta de forma directa como el error promedio en la predicción del precio.\n\n"))
+
+cat(paste0("3. El mejor modelo según **R²** fue **", r2_mejor$modelo,
+           "**, con un R² de **", r2_mejor$R2,
+           "**. Esto indica qué proporción de la variabilidad del precio logra explicar el modelo en datos no vistos.\n\n"))
+
+cat(paste0("4. En el otro extremo, el modelo con peor RMSE fue **", peor_modelo$modelo,
+           "**, con un valor de **", peor_modelo$RMSE,
+           "**. Esto permite contrastar si la regularización realmente mejora la generalización frente a un modelo más flexible o menos penalizado.\n\n"))
+
+cat(paste0("5. En los modelos penalizados, **Ridge** mantiene todas las variables pero reduce su magnitud; **Lasso** hace selección automática y dejó **",
+           conteo_coef$coeficientes_no_cero[conteo_coef$modelo == "Lasso"],
+           "** coeficientes distintos de cero; y **Elastic Net** dejó **",
+           conteo_coef$coeficientes_no_cero[grep("Elastic Net", conteo_coef$modelo)],
+           "**. Esto muestra cómo la regularización puede simplificar el modelo sin necesariamente perder capacidad predictiva.\n\n"))
+
+if (nrow(coef_lasso_tbl) > 0) {
+  top_vars <- paste(head(coef_lasso_tbl$variable, 5), collapse = ", ")
+  cat(paste0("6. Las variables con mayor peso absoluto dentro del modelo Lasso fueron: **",
+             top_vars,
+             "**. Estas variables son candidatas fuertes a ser los predictores más relevantes del precio dentro del conjunto analizado.\n\n"))
+}
+
+cat("7. En general, si un modelo regularizado supera o iguala a la regresión lineal tradicional en el set de prueba, se prefiere porque suele ser más robusto frente a multicolinealidad, sobreajuste y exceso de variables dummy. Para este problema, eso es especialmente útil porque hay variables continuas correlacionadas entre sí y variables categóricas convertidas en múltiples indicadores.\n")
+```
