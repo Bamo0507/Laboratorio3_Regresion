@@ -1473,7 +1473,7 @@ if (nrow(coef_lasso_tbl) > 0) {
 cat("7. En general, si un modelo regularizado supera o iguala a la regresión lineal tradicional en el set de prueba, se prefiere porque suele ser más robusto frente a multicolinealidad, sobreajuste y exceso de variables dummy. Para este problema, eso es especialmente útil porque hay variables continuas correlacionadas entre sí y variables categóricas convertidas en múltiples indicadores.\n")
 ```
 
-## **12. Evaluación de eficiencia con el conjunto de prueba**
+## **Evaluación de eficiencia con el conjunto de prueba**
 
 En esta parte se mide qué tan bien predijo cada modelo el precio de las casas cuando se enfrentó a datos que no vio durante el entrenamiento. Para evaluar la calidad de la predicción se usan tres métricas:
 
@@ -1573,4 +1573,90 @@ if (r2_max < 0.15) {
 } else {
   cat("5. Los valores de R² indican que el mejor modelo ya logra una capacidad explicativa relativamente alta para este problema.\n")
 }
+```
+
+## **Discusión de la efectividad de los modelos y selección del mejor**
+
+Para discutir cuál modelo fue más efectivo conviene separar dos ideas. Primero, comparar los modelos bajo condiciones justas. Segundo, elegir el modelo más conveniente para predecir el precio sin quedarse solo con una métrica aislada.
+
+```{r seleccion-mejor-modelo, message=FALSE, warning=FALSE}
+# Selección del mejor modelo dentro de la comparación más justa: modelos con el mismo split y predictores
+ranking_regularizados <- metricas_regularizados %>% arrange(RMSE, MAE, desc(R2))
+mejor_modelo_final <- ranking_regularizados %>% slice(1)
+segundo_modelo_final <- ranking_regularizados %>% slice(2)
+
+# Preparar datos observados vs predichos del mejor modelo regularizado
+if (mejor_modelo_final$modelo == "Regresión lineal") {
+  obs_best <- y_test
+  pred_best <- pred_lm
+} else if (mejor_modelo_final$modelo == "Ridge") {
+  obs_best <- y_test
+  pred_best <- pred_ridge
+} else if (mejor_modelo_final$modelo == "Lasso") {
+  obs_best <- y_test
+  pred_best <- pred_lasso
+} else {
+  obs_best <- y_test
+  pred_best <- pred_enet
+}
+
+df_best_model <- tibble(
+  real = obs_best,
+  predicho = pred_best,
+  residuo = obs_best - pred_best
+)
+```
+
+```{r grafico-best-modelo, fig.height=5.5, fig.width=7}
+ggplot(df_best_model, aes(x = real, y = predicho)) +
+  geom_point(alpha = 0.4) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  labs(
+    title = paste0("Real vs predicho - ", mejor_modelo_final$modelo),
+    x = "Precio real",
+    y = "Precio predicho"
+  ) +
+  theme_minimal()
+```
+
+```{r grafico-residuos-best-modelo, fig.height=5, fig.width=7}
+ggplot(df_best_model, aes(x = predicho, y = residuo)) +
+  geom_point(alpha = 0.4) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(
+    title = paste0("Residuos del mejor modelo - ", mejor_modelo_final$modelo),
+    x = "Precio predicho",
+    y = "Residuo"
+  ) +
+  theme_minimal()
+```
+
+```{r discusion-final-modelos, results='asis'}
+dif_rmse <- segundo_modelo_final$RMSE - mejor_modelo_final$RMSE
+
+cat("### Discusión final sobre la efectividad de los modelos\n\n")
+
+cat(paste0("1. El modelo que mostró mejor desempeño dentro de la comparación más controlada fue **",
+           mejor_modelo_final$modelo,
+           "**, porque obtuvo el menor **RMSE** (",
+           round(mejor_modelo_final$RMSE, 2),
+           "), el criterio principal para este problema. Se priorizó RMSE porque en precios de viviendas o alojamientos los errores grandes son especialmente costosos y esta métrica los penaliza más.\n\n"))
+
+cat(paste0("2. El segundo mejor modelo fue **",
+           segundo_modelo_final$modelo,
+           "**. La diferencia de RMSE entre ambos fue de **",
+           round(dif_rmse, 2),
+           "**. Esto ayuda a ver si la ventaja del mejor modelo es clara o si en realidad varios modelos rinden de forma muy parecida.\n\n"))
+
+if (grepl("Ridge|Lasso|Elastic Net", mejor_modelo_final$modelo)) {
+  cat("3. Como el mejor modelo pertenece a la familia de regularización, se puede concluir que penalizar los coeficientes sí ayudó a mejorar la generalización. Esto tiene sentido porque el problema incluye variables correlacionadas, variables categóricas convertidas en dummies y posibles señales redundantes.\n\n")
+} else {
+  cat("3. Como el mejor modelo fue la regresión lineal sin penalización, la regularización no aportó una mejora suficiente en este caso. Eso sugiere que, con este conjunto de predictores, el beneficio principal vino más de la selección e ingeniería de variables que de la penalización.\n\n")
+}
+
+cat("4. Los gráficos de real vs predicho y de residuos permiten ver visualmente qué tan bien se adapta el mejor modelo. Si los puntos se alejan mucho de la diagonal o si los residuos muestran patrones claros, eso significa que todavía hay estructura no capturada por el modelo. En este dataset es esperable observar dificultades para seguir los precios más altos, debido a la asimetría y a la presencia de valores atípicos en `price`.\n\n")
+
+cat("5. En términos prácticos, el mejor modelo para predecir el precio de las casas debe elegirse con base en tres criterios: menor error en prueba, estabilidad frente a multicolinealidad y capacidad de generalizar. Por eso, el modelo recomendado para este laboratorio es el que ganó en la comparación controlada entre OLS, Ridge, Lasso y Elastic Net. Esa es la selección más defendible porque todos esos modelos se evaluaron bajo las mismas condiciones.\n\n")
+
+cat("6. Aun así, el desempeño global muestra que la tarea sigue siendo difícil. Si los errores siguen siendo altos y el R² sigue siendo bajo, la conclusión correcta no es solo escoger un ganador, sino reconocer que todavía hay espacio para mejorar con transformaciones de `price` (por ejemplo, `log(price)`), interacciones entre variables, codificaciones más ricas de ubicación o incluso modelos no lineales.\n")
 ```
