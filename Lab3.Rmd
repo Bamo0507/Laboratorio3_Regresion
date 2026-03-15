@@ -996,6 +996,203 @@ comparacion <- data.frame(
 knitr::kable(comparacion, caption = "Comparación de modelos en test")
 ```
 
+Agregar más variables redujo el RMSE de 4,358 a 2,577 y mejoró el R2 de 0.009 a 0.107. Sin embargo, el modelo sigue explicando menos del 11% de la variabilidad del precio, lo que indica que las variables numéricas disponibles no capturan los factores más determinantes del precio en este dataset.
+
+### **Análisis de Multicolinealidad, Ajuste y Sobreajuste**
+
+#### Factor de Inflación de Varianza
+
+La multicolinealidad ocurre cuando dos o más variables predictoras están altamente correlacionadas entre sí, lo que infla los errores estándar de los coeficientes y dificulta interpretar el efecto individual de cada variable. 
+
+
+```{r vif}
+library(car)
+vif_valores <- vif(modelo_full)
+vif_df <- data.frame(
+  Variable = names(vif_valores),
+  VIF = round(vif_valores, 2)
+)
+vif_df <- vif_df[order(-vif_df$VIF), ]
+knitr::kable(vif_df, caption = "VIF por variable — Modelo completo", row.names = FALSE)
+```
+
+```{r vif-plot}
+barplot(sort(vif_valores, decreasing = TRUE),
+        main = "Factor de Inflación de Varianza (VIF)",
+        ylab = "VIF", las = 2,
+        col = ifelse(sort(vif_valores, decreasing = TRUE) > 10, "tomato",
+              ifelse(sort(vif_valores, decreasing = TRUE) > 5, "orange", "steelblue")))
+abline(h = 5,  col = "orange", lty = 2, lwd = 2)
+abline(h = 10, col = "red",    lty = 2, lwd = 2)
+```
+
+Los resultados muestran multicolinealidad grave en las variables de disponibilidad: `availability_90` (VIF = 70.89), `availability_eoy` (45.76) y `availability_60` (25.92), lo que indica que estas tres variables comparten información redundante y sus efectos individuales no pueden estimarse con confianza. `latitude` y `longitude` también presentan multicolinealidad moderada-grave (VIF > 12), lo cual es esperable dado que la ubicación geográfica tiene dos componentes correlacionados. El resto de variables se mantiene en rangos aceptables.
+
+#### Correlación entre predictores
+
+```{r correlacion-predictores}
+library(corrplot)
+vars_modelo <- names(train_num)[names(train_num) != "price"]
+cor_pred <- cor(train_num[, vars_modelo], use = "complete.obs")
+corrplot(cor_pred, method = "color", type = "upper",
+         tl.col = "black", tl.srt = 45, tl.cex = 0.6,
+         title = "Correlación entre predictores", mar = c(0,0,1,0))
+```
+
+La matriz de correlación confirma lo observado en el VIF: las variables de disponibilidad (`availability_30`, `availability_60`, `availability_90`, `availability_365`, `availability_eoy`) están fuertemente correlacionadas entre sí, formando un bloque de alta colinealidad. De forma similar, `accommodates`, `bedrooms` y `beds` muestran correlaciones positivas entre ellas, lo que es lógico ya que todas describen el tamaño físico del alojamiento. Las variables de puntuación de reseñas también presentan correlaciones moderadas entre sí.
+
+#### Variables que aportan al modelo
+
+```{r vars-significativas}
+coefs <- summary(modelo_full)$coefficients
+coefs_df <- data.frame(
+  Variable  = rownames(coefs),
+  Estimado  = round(coefs[, 1], 4),
+  Std.Error = round(coefs[, 2], 4),
+  p.value   = round(coefs[, 4], 6)
+)
+coefs_df$Significativa <- ifelse(coefs_df$p.value < 0.05, "Si", "No")
+coefs_df <- coefs_df[coefs_df$Variable != "(Intercept)", ]
+coefs_df <- coefs_df[order(coefs_df$p.value), ]
+knitr::kable(coefs_df, caption = "Coeficientes y significancia", row.names = FALSE)
+```
+
+De las 29 variables incluidas, 18 resultan estadísticamente significativas (p < 0.05). Las que más aportan al modelo son `host_listings_count`, `accommodates`, `bathrooms`, `beds`, `review_scores_cleanliness`, `review_scores_location` y `calculated_host_listings_count`. Por otro lado, variables como `availability_30`, `availability_60`, `review_scores_rating`, `number_of_reviews` y `minimum_maximum_nights` no son significativas, lo que es consistente con los altos valores de VIF observados y la redundancia detectada en la matriz de correlación.
+
+#### Evaluación de sobreajuste
+
+El sobreajuste ocurre cuando un modelo aprende el ruido del conjunto de entrenamiento en lugar de los patrones generales, obteniendo buenas métricas en train pero malas en test. Para evaluarlo, se comparan el R2 y el RMSE en ambos conjuntos.
+
+```{r overfitting}
+pred_train <- predict(modelo_full, newdata = train_num)
+
+rmse_train <- sqrt(mean((train_num$price - pred_train)^2, na.rm = TRUE))
+r2_train   <- 1 - sum((train_num$price - pred_train)^2, na.rm = TRUE) /
+                  sum((train_num$price - mean(train_num$price, na.rm = TRUE))^2, na.rm = TRUE)
+
+overfitting_df <- data.frame(
+  Conjunto = c("Entrenamiento", "Prueba"),
+  RMSE     = c(round(rmse_train, 2), round(rmse_full, 2)),
+  R2       = c(round(r2_train, 4),   round(r2_full, 4))
+)
+knitr::kable(overfitting_df, caption = "Comparación train vs test")
+```
+
+El RMSE en entrenamiento es 2,310 y en prueba 2,577, mientras que el R2 es 0.0928 en train y 0.1071 en test. Los valores son muy similares entre ambos conjuntos, lo que indica que no hay sobreajuste: el modelo generaliza de forma consistente a datos no vistos. El ligero aumento del R2 en test es normal dado el tamaño del dataset y no representa una señal preocupante.
+
+### **Modelo con Mejores Predictores**
+
+Aunque no se detectó sobreajuste, el análisis de multicolinealidad reveló variables con VIF excesivamente alto que afectan la estabilidad de los coeficientes. Se construye un modelo corregido eliminando las variables con multicolinealidad grave (`availability_60`, `availability_90`, `availability_eoy`, `latitude`, `longitude`) y las no significativas (`review_scores_checkin`, `review_scores_accuracy`, `reviews_per_month`, `availability_30`, `review_scores_rating`, `number_of_reviews`, `maximum_maximum_nights`, `review_scores_communication`, `minimum_maximum_nights`). Las variables conservadas son significativas y tienen VIF en rangos aceptables.
+
+#### Ajuste del modelo
+
+```{r modelo-mejor}
+vars_mejor <- c(
+  "host_listings_count", "accommodates", "bathrooms", "bedrooms", "beds",
+  "minimum_nights", "maximum_nights", "minimum_minimum_nights", "maximum_minimum_nights",
+  "availability_365", "estimated_occupancy_l365d",
+  "review_scores_cleanliness", "review_scores_location", "review_scores_value",
+  "calculated_host_listings_count"
+)
+
+train_mejor <- train_num[, c(vars_mejor, "price")]
+test_mejor  <- test_num[,  c(vars_mejor, "price")]
+
+modelo_mejor <- lm(price ~ ., data = train_mejor)
+summary(modelo_mejor)
+```
+
+Todas las variables del modelo son estadísticamente significativas (p < 0.05), lo que confirma que la selección fue adecuada. El R2 es 0.0918, prácticamente igual al modelo completo (0.0928), lo que indica que las variables eliminadas no aportaban información real. El modelo es más parsimonioso y sus coeficientes son más confiables al no estar inflados por multicolinealidad.
+
+#### Análisis de residuos
+
+**Linealidad**
+
+```{r linealidad-mejor}
+plot(modelo_mejor$fitted.values, resid(modelo_mejor),
+     main = "Residuos vs Valores Ajustados",
+     xlab = "Valores ajustados", ylab = "Residuos",
+     pch = 19, col = rgb(0, 0, 1, 0.3))
+abline(h = 0, col = "red", lwd = 2)
+```
+
+Los residuos continúan mostrando una estructura no aleatoria con bandas diagonales y dispersión creciente. Persisten predicciones negativas y residuos extremos cercanos a 50,000, lo que indica que el problema de fondo no es la multicolinealidad sino la distribución altamente sesgada de `price`. El supuesto de linealidad no se cumple en ninguno de los modelos evaluados.
+
+**Normalidad**
+
+```{r normalidad-mejor}
+qqnorm(resid(modelo_mejor), main = "QQ-Plot de Residuos")
+qqline(resid(modelo_mejor), col = "red", lwd = 2)
+shapiro.test(sample(resid(modelo_mejor), 5000))
+```
+
+La prueba de Shapiro-Wilk arroja W = 0.180 con p-value < 2.2e-16, rechazando H0. La distribución de los residuos sigue siendo fuertemente asimétrica, consistente con los resultados de los modelos anteriores. La presencia de precios extremadamente altos en el dataset es la causa principal de este incumplimiento.
+
+**Homocedasticidad**
+
+```{r homo-mejor}
+bptest(modelo_mejor)
+```
+
+La prueba de Breusch-Pagan arroja BP = 3640.8 con p-value < 2.2e-16, rechazando H0. La heterocedasticidad persiste con similar magnitud al modelo completo, lo que confirma que este problema está asociado a la naturaleza de la variable respuesta y no a las variables incluidas.
+
+**Independencia**
+
+```{r independencia-mejor}
+dwtest(modelo_mejor)
+```
+
+La prueba de Durbin-Watson arroja DW = 2.008 con p-value = 0.814, no rechazando H0. La independencia de los residuos se mantiene, siendo el único supuesto que se cumple de forma consistente en los tres modelos evaluados.
+
+#### VIF del modelo corregido
+
+```{r vif-mejor}
+vif_mejor <- vif(modelo_mejor)
+vif_mejor_df <- data.frame(
+  Variable = names(vif_mejor),
+  VIF = round(vif_mejor, 2)
+)
+vif_mejor_df <- vif_mejor_df[order(-vif_mejor_df$VIF), ]
+knitr::kable(vif_mejor_df, caption = "VIF — Modelo con mejores predictores", row.names = FALSE)
+```
+
+El VIF máximo se redujo de 70.89 a 7.15 (`minimum_minimum_nights`), y todos los valores se encuentran por debajo de 10. La multicolinealidad grave fue eliminada satisfactoriamente, lo que hace que los coeficientes del modelo sean más estables e interpretables que en el modelo completo.
+
+#### Visualización del modelo
+
+```{r grafico-mejor}
+pred_mejor_test <- predict(modelo_mejor, newdata = test_mejor)
+
+plot(test_mejor$price, pred_mejor_test,
+     main = "Valores reales vs predichos — Modelo corregido",
+     xlab = "Precio real ($)", ylab = "Precio predicho ($)",
+     pch = 19, col = rgb(0.2, 0.4, 0.8, 0.3))
+abline(a = 0, b = 1, col = "red", lwd = 2)
+```
+
+Las predicciones continúan concentradas en un rango estrecho respecto a los valores reales, con subestimación de precios altos y presencia de predicciones negativas. La alineación con la línea ideal es baja, lo que refleja que la limitación del modelo no es corregible solo mediante selección de variables, sino que requeriría transformaciones de la variable respuesta o modelos no lineales.
+
+#### Métricas y comparación final
+
+```{r metricas-mejor}
+pred_mejor_train <- predict(modelo_mejor, newdata = train_mejor)
+
+rmse_mejor_train <- sqrt(mean((train_mejor$price - pred_mejor_train)^2, na.rm = TRUE))
+rmse_mejor_test  <- sqrt(mean((test_mejor$price  - pred_mejor_test)^2,  na.rm = TRUE))
+r2_mejor_train   <- 1 - sum((train_mejor$price - pred_mejor_train)^2, na.rm = TRUE) /
+                        sum((train_mejor$price - mean(train_mejor$price, na.rm = TRUE))^2, na.rm = TRUE)
+r2_mejor_test    <- 1 - sum((test_mejor$price  - pred_mejor_test)^2,  na.rm = TRUE) /
+                        sum((test_mejor$price  - mean(test_mejor$price,  na.rm = TRUE))^2, na.rm = TRUE)
+
+comparacion_final <- data.frame(
+  Modelo   = c("Univariado", "Todas las variables", "Mejores predictores"),
+  RMSE_test = c(round(rmse_uni, 2), round(rmse_full, 2), round(rmse_mejor_test, 2)),
+  R2_test   = c(round(r2_uni, 4),   round(r2_full, 4),   round(r2_mejor_test, 4))
+)
+knitr::kable(comparacion_final, caption = "Comparación final de modelos en test")
+```
+
+El modelo con mejores predictores obtiene un RMSE de 2,580.60 y R2 de 0.1053, prácticamente idéntico al modelo completo (RMSE 2,577.94, R2 0.1071), con 15 variables en lugar de 29. Esto confirma que las variables eliminadas no aportaban capacidad predictiva real. Respecto al modelo univariado, la mejora es considerable: el RMSE se redujo en casi 1,800 dólares y el R2 aumentó diez veces. Sin embargo, los tres modelos muestran un R2 bajo, lo que sugiere que la regresión lineal sobre variables numéricas no es suficiente para capturar la complejidad del precio en este dataset y que se requerirían transformaciones o enfoques más avanzados.
 
 
 
